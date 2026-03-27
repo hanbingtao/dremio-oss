@@ -989,6 +989,7 @@ public class SourceService {
     final StoragePlugin plugin =
         checkNotNull(
             catalogService.getSource(sourceName), "storage plugin %s not found", sourceName);
+    final SupportsListingDatasets listingPlugin = getListingPlugin(plugin);
     final boolean isVersionedPlugin = plugin.isWrapperFor(VersionedPlugin.class);
     Span.current().setAttribute(IS_VERSIONED_PLUGIN_SPAN_ATTRIBUTE_NAME, isVersionedPlugin);
 
@@ -1013,14 +1014,14 @@ public class SourceService {
         }
       }
     } catch (NamespaceNotFoundException e) {
-      if (!(showDatasets && plugin instanceof SupportsListingDatasets)) {
+      if (!(showDatasets && listingPlugin != null)) {
         throw e;
       }
       logger.debug("Namespace path {} not found, falling back to plugin listing", path, e);
     }
 
-    if (resources.isEmpty() && showDatasets && plugin instanceof SupportsListingDatasets) {
-      resources.addAll(listPathFromPlugin(path, (SupportsListingDatasets) plugin));
+    if (resources.isEmpty() && showDatasets && listingPlugin != null) {
+      resources.addAll(listPathFromPlugin(path, listingPlugin));
     }
 
     return new ImmutableResourceTreeListResponse.Builder().setEntities(resources).build();
@@ -1084,6 +1085,18 @@ public class SourceService {
     }
 
     return new ArrayList<>(entities.values());
+  }
+
+  private SupportsListingDatasets getListingPlugin(StoragePlugin plugin) {
+    if (plugin instanceof SupportsListingDatasets) {
+      return (SupportsListingDatasets) plugin;
+    }
+
+    if (plugin.isWrapperFor(SupportsListingDatasets.class)) {
+      return plugin.unwrap(SupportsListingDatasets.class);
+    }
+
+    return null;
   }
 
   protected VersionContext getVersionContext(String refType, String refValue) {
