@@ -388,7 +388,8 @@ public class JobResource extends BaseResourceWithAllocator {
             readSecretField(connectionConf, "password"),
             readBooleanField(connectionConf, "useSsl", false),
             databaseName,
-            tableName));
+            tableName,
+            sql));
   }
 
   private JobDataFragment loadClickHouseData(
@@ -399,10 +400,11 @@ public class JobResource extends BaseResourceWithAllocator {
         String.format(
             "jdbc:clickhouse://%s:%d/?compress=0%s",
             context.hostname, context.port, context.useSsl ? "&ssl=true" : "");
+    final String baseSql = stripTrailingSemicolon(context.sql);
     final String sql =
         String.format(
-            "SELECT * FROM `%s`.`%s` LIMIT %d OFFSET %d",
-            context.databaseName, context.tableName, limit, offset);
+            "SELECT * FROM (%s) AS dremio_clickhouse_fallback LIMIT %d OFFSET %d",
+            baseSql, limit, offset);
 
     try (Connection connection =
             DriverManager.getConnection(jdbcUrl, context.username, context.password);
@@ -506,6 +508,7 @@ public class JobResource extends BaseResourceWithAllocator {
     private final boolean useSsl;
     private final String databaseName;
     private final String tableName;
+    private final String sql;
 
     private ClickHouseQueryContext(
         String hostname,
@@ -514,7 +517,8 @@ public class JobResource extends BaseResourceWithAllocator {
         String password,
         boolean useSsl,
         String databaseName,
-        String tableName) {
+        String tableName,
+        String sql) {
       this.hostname = hostname;
       this.port = port;
       this.username = username;
@@ -522,7 +526,19 @@ public class JobResource extends BaseResourceWithAllocator {
       this.useSsl = useSsl;
       this.databaseName = databaseName;
       this.tableName = tableName;
+      this.sql = sql;
     }
+  }
+
+  private static String stripTrailingSemicolon(String sql) {
+    if (sql == null) {
+      return "";
+    }
+    String trimmed = sql.trim();
+    while (trimmed.endsWith(";")) {
+      trimmed = trimmed.substring(0, trimmed.length() - 1).trim();
+    }
+    return trimmed;
   }
 
   public static String getDownloadURL(JobDetails jobDetails) {
