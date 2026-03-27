@@ -27,6 +27,7 @@ import com.dremio.connector.metadata.ListPartitionChunkOption;
 import com.dremio.connector.metadata.PartitionChunkListing;
 import com.dremio.connector.metadata.extensions.SupportsListingDatasets;
 import com.dremio.exec.catalog.PluginSabotContext;
+import com.dremio.exec.planner.cost.ScanCostFactor;
 import com.dremio.exec.store.StoragePlugin;
 import com.dremio.exec.store.StoragePluginRulesFactory;
 import com.dremio.service.namespace.NamespaceKey;
@@ -208,7 +209,7 @@ public class ClickHouseStoragePlugin implements StoragePlugin, SupportsListingDa
 
         @Override
         public DatasetStats getDatasetStats() {
-          return DatasetStats.of(0, false, 0.0);
+          return DatasetStats.of(0, false, ScanCostFactor.OTHER.getFactor());
         }
       };
 
