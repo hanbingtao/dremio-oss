@@ -46,6 +46,7 @@ import com.dremio.dac.service.errors.JobResourceNotFoundException;
 import com.dremio.dac.util.DownloadUtil;
 import com.dremio.exec.catalog.ConnectionReader;
 import com.dremio.exec.catalog.conf.ConnectionConf;
+import com.dremio.exec.catalog.conf.SecretRef;
 import com.dremio.exec.record.RecordBatchData;
 import com.dremio.exec.record.RecordBatchHolder;
 import com.dremio.exec.record.VectorContainer;
@@ -481,7 +482,10 @@ public class JobResource extends BaseResourceWithAllocator {
     if (secretRef == null) {
       return "";
     }
-    return Objects.toString(secretRef.getClass().getMethod("get").invoke(secretRef), "");
+    if (secretRef instanceof SecretRef) {
+      return Objects.toString(((SecretRef) secretRef).get(), "");
+    }
+    return Objects.toString(secretRef, "");
   }
 
   private static String firstNonNull(String first, String second, String fallback) {
