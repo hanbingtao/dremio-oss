@@ -33,6 +33,10 @@ import org.slf4j.LoggerFactory;
 public class ClickHouseConnectionPool {
 
   private static final Logger logger = LoggerFactory.getLogger(ClickHouseConnectionPool.class);
+  private static final String[] DRIVER_CLASS_NAMES = {
+    "com.dremio.clickhouse.clickhouse.jdbc.ClickHouseDriver",
+    "com.clickhouse.jdbc.ClickHouseDriver"
+  };
 
   private final String jdbcUrl;
   private final String database;
@@ -58,11 +62,7 @@ public class ClickHouseConnectionPool {
     this.connections = new ConcurrentHashMap<>();
     this.connectionCounter = new AtomicInteger(0);
 
-    try {
-      Class.forName("com.clickhouse.jdbc.ClickHouseDriver");
-    } catch (ClassNotFoundException e) {
-      logger.error("ClickHouse JDBC driver not found", e);
-    }
+    loadDriver();
   }
 
   public Connection getConnection() throws SQLException {
@@ -107,13 +107,28 @@ public class ClickHouseConnectionPool {
     Connection conn = null;
     try {
       conn = getConnection();
-      for (String databaseName : getDatabases(conn)) {
+      List<String> databases = getDatabases(conn);
+      logger.info(
+          "Discovering ClickHouse tables via jdbcUrl={}, configuredDatabase={}, databases={}",
+          jdbcUrl,
+          database,
+          databases);
+      for (String databaseName : databases) {
         String sql = "SHOW TABLES FROM " + quoteIdentifier(databaseName);
+        logger.info("Executing ClickHouse metadata query: {}", sql);
         try (Statement stmt = conn.createStatement();
             ResultSet rs = stmt.executeQuery(sql)) {
           while (rs.next()) {
             tables.add(new TablePath(databaseName, rs.getString(1)));
           }
+        } catch (SQLException e) {
+          logger.error(
+              "Failed ClickHouse metadata query for database {} using sql {}: {}",
+              databaseName,
+              sql,
+              e.getMessage(),
+              e);
+          throw e;
         }
       }
     } finally {
@@ -147,6 +162,7 @@ public class ClickHouseConnectionPool {
 
   private List<String> getDatabases(Connection conn) throws SQLException {
     if (!shouldDiscoverAllDatabases()) {
+      logger.info("Using configured ClickHouse database only: {}", database);
       return List.of(database);
     }
 
@@ -159,6 +175,9 @@ public class ClickHouseConnectionPool {
           databases.add(databaseName);
         }
       }
+    } catch (SQLException e) {
+      logger.error("Failed ClickHouse database discovery query SHOW DATABASES: {}", e.getMessage(), e);
+      throw e;
     }
     return databases;
   }
@@ -170,6 +189,22 @@ public class ClickHouseConnectionPool {
   private boolean isSystemDatabase(String databaseName) {
     return "system".equalsIgnoreCase(databaseName)
         || "information_schema".equalsIgnoreCase(databaseName);
+  }
+
+  private void loadDriver() {
+    for (String driverClassName : DRIVER_CLASS_NAMES) {
+      try {
+        Class.forName(driverClassName);
+        logger.info("Loaded ClickHouse JDBC driver {}", driverClassName);
+        return;
+      } catch (ClassNotFoundException e) {
+        logger.debug("ClickHouse JDBC driver class not available: {}", driverClassName);
+      }
+    }
+
+    logger.error(
+        "ClickHouse JDBC driver not found. Tried driver classes {}",
+        List.of(DRIVER_CLASS_NAMES));
   }
 
   private String quoteIdentifier(String identifier) {
