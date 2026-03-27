@@ -1001,15 +1001,22 @@ public class SourceService {
           path, response, ResourceTreeEntity.ResourceType.SOURCE, showFunctions);
     }
 
-    // Since we're listing path in a source, the rootType should be SOURCE
-    for (NameSpaceContainer container : namespaceService.list(path, pageToken, maxResults)) {
-      if (container.getType() == Type.FOLDER) {
-        resources.add(
-            new ResourceTreeEntity(container.getFolder(), ResourceTreeEntity.ResourceType.SOURCE));
-      } else if (showDatasets && container.getType() == Type.DATASET) {
-        resources.add(
-            new ResourceTreeEntity(container.getDataset(), ResourceTreeEntity.ResourceType.SOURCE));
+    try {
+      // Since we're listing path in a source, the rootType should be SOURCE
+      for (NameSpaceContainer container : namespaceService.list(path, pageToken, maxResults)) {
+        if (container.getType() == Type.FOLDER) {
+          resources.add(
+              new ResourceTreeEntity(container.getFolder(), ResourceTreeEntity.ResourceType.SOURCE));
+        } else if (showDatasets && container.getType() == Type.DATASET) {
+          resources.add(
+              new ResourceTreeEntity(container.getDataset(), ResourceTreeEntity.ResourceType.SOURCE));
+        }
       }
+    } catch (NamespaceNotFoundException e) {
+      if (!(showDatasets && plugin instanceof SupportsListingDatasets)) {
+        throw e;
+      }
+      logger.debug("Namespace path {} not found, falling back to plugin listing", path, e);
     }
 
     if (resources.isEmpty() && showDatasets && plugin instanceof SupportsListingDatasets) {
