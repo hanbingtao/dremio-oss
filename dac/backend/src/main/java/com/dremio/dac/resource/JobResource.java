@@ -382,6 +382,7 @@ public class JobResource extends BaseResourceWithAllocator {
 
     return Optional.of(
         new ClickHouseQueryContext(
+            sourceName,
             readStringField(connectionConf, "hostname", "localhost"),
             readIntField(connectionConf, "port", 8123),
             readStringField(connectionConf, "username", "default"),
@@ -400,7 +401,7 @@ public class JobResource extends BaseResourceWithAllocator {
         String.format(
             "jdbc:clickhouse://%s:%d/?compress=0%s",
             context.hostname, context.port, context.useSsl ? "&ssl=true" : "");
-    final String baseSql = stripTrailingSemicolon(context.sql);
+    final String baseSql = normalizeClickHouseSql(context);
     final String sql =
         String.format(
             "SELECT * FROM (%s) AS dremio_clickhouse_fallback LIMIT %d OFFSET %d",
@@ -501,6 +502,7 @@ public class JobResource extends BaseResourceWithAllocator {
   }
 
   private static final class ClickHouseQueryContext {
+    private final String sourceName;
     private final String hostname;
     private final int port;
     private final String username;
@@ -511,6 +513,7 @@ public class JobResource extends BaseResourceWithAllocator {
     private final String sql;
 
     private ClickHouseQueryContext(
+        String sourceName,
         String hostname,
         int port,
         String username,
@@ -519,6 +522,7 @@ public class JobResource extends BaseResourceWithAllocator {
         String databaseName,
         String tableName,
         String sql) {
+      this.sourceName = sourceName;
       this.hostname = hostname;
       this.port = port;
       this.username = username;
@@ -528,6 +532,25 @@ public class JobResource extends BaseResourceWithAllocator {
       this.tableName = tableName;
       this.sql = sql;
     }
+  }
+
+  private static String normalizeClickHouseSql(ClickHouseQueryContext context) {
+    String sql = stripTrailingSemicolon(context.sql);
+    if (Strings.isNullOrEmpty(sql)) {
+      return String.format("SELECT * FROM `%s`.`%s`", context.databaseName, context.tableName);
+    }
+
+    final String sourcePattern = Pattern.quote(context.sourceName);
+    final String dbPattern =
+        "(?:\"" + Pattern.quote(context.databaseName) + "\"|" + Pattern.quote(context.databaseName) + ")";
+    final String tablePattern =
+        "(?:\"" + Pattern.quote(context.tableName) + "\"|" + Pattern.quote(context.tableName) + ")";
+
+    sql =
+        sql.replaceAll(
+            "(?i)\\b" + sourcePattern + "\\s*\\.\\s*" + dbPattern + "\\s*\\.\\s*" + tablePattern,
+            "`" + context.databaseName + "`.`" + context.tableName + "`");
+    return sql;
   }
 
   private static String stripTrailingSemicolon(String sql) {
