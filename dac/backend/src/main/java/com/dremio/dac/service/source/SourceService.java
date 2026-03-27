@@ -71,6 +71,9 @@ import com.dremio.exec.catalog.ImmutableVersionedListOptions;
 import com.dremio.exec.catalog.MetadataRequestOptions;
 import com.dremio.exec.catalog.SourceCatalog;
 import com.dremio.exec.catalog.SourceRefreshOption;
+import com.dremio.connector.metadata.DatasetHandle;
+import com.dremio.connector.metadata.EntityPath;
+import com.dremio.connector.metadata.extensions.SupportsListingDatasets;
 import com.dremio.exec.catalog.VersionedPlugin;
 import com.dremio.exec.catalog.conf.ConnectionConf;
 import com.dremio.exec.store.CatalogService;
@@ -115,6 +118,7 @@ import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -1008,7 +1012,71 @@ public class SourceService {
       }
     }
 
+    if (resources.isEmpty() && showDatasets && plugin instanceof SupportsListingDatasets) {
+      resources.addAll(listPathFromPlugin(path, (SupportsListingDatasets) plugin));
+    }
+
     return new ImmutableResourceTreeListResponse.Builder().setEntities(resources).build();
+  }
+
+  private List<ResourceTreeEntity> listPathFromPlugin(
+      NamespaceKey path, SupportsListingDatasets plugin) throws UnsupportedEncodingException {
+    final Map<List<String>, ResourceTreeEntity> entities = new LinkedHashMap<>();
+    final List<String> requestedPath = path.getPathComponents();
+
+    try (var listing = plugin.listDatasetHandles()) {
+      var iterator = listing.iterator();
+      while (iterator.hasNext()) {
+        DatasetHandle handle = iterator.next();
+        EntityPath datasetPath = handle.getDatasetPath();
+        List<String> fullPath = datasetPath.getComponents();
+        if (fullPath.isEmpty()) {
+          continue;
+        }
+
+        if (!requestedPath.equals(fullPath.subList(0, Math.min(requestedPath.size(), fullPath.size())))) {
+          continue;
+        }
+
+        if (fullPath.size() <= requestedPath.size()) {
+          continue;
+        }
+
+        if (fullPath.size() == requestedPath.size() + 1) {
+          entities.computeIfAbsent(
+              fullPath,
+              key ->
+                  new ResourceTreeEntity(
+                      ResourceTreeEntity.ResourceType.PHYSICAL_DATASET,
+                      key.get(key.size() - 1),
+                      key,
+                      null,
+                      null,
+                      String.join(".", key),
+                      ResourceTreeEntity.ResourceType.SOURCE,
+                      false));
+          continue;
+        }
+
+        List<String> folderPath = fullPath.subList(0, requestedPath.size() + 1);
+        entities.computeIfAbsent(
+            folderPath,
+            key ->
+                new ResourceTreeEntity(
+                    ResourceTreeEntity.ResourceType.FOLDER,
+                    key.get(key.size() - 1),
+                    key,
+                    "/resourcetree/" + new NamespaceKey(key).toUrlEncodedString(),
+                    null,
+                    String.join(".", key),
+                    ResourceTreeEntity.ResourceType.SOURCE,
+                    null));
+      }
+    } catch (Exception e) {
+      logger.warn("Failed to list path {} directly from source plugin", path, e);
+    }
+
+    return new ArrayList<>(entities.values());
   }
 
   protected VersionContext getVersionContext(String refType, String refValue) {

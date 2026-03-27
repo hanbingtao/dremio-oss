@@ -128,7 +128,7 @@ public class ClickHouseStoragePlugin implements StoragePlugin, SupportsListingDa
 
         for (ClickHouseConnectionPool.TablePath table : tables) {
           EntityPath path =
-              new EntityPath(List.of(table.getDatabaseName(), table.getTableName()));
+              new EntityPath(List.of(name, table.getDatabaseName(), table.getTableName()));
           handles.add(
               new ClickHouseDatasetHandle(
                   path, table.getDatabaseName(), table.getTableName(), "TABLE"));
@@ -150,7 +150,7 @@ public class ClickHouseStoragePlugin implements StoragePlugin, SupportsListingDa
     }
 
     List<String> components = path.getComponents();
-    if (components.size() < 2) {
+    if (components.size() < 3) {
       return Optional.empty();
     }
 
@@ -226,7 +226,11 @@ public class ClickHouseStoragePlugin implements StoragePlugin, SupportsListingDa
       }
 
       if (components.size() == 1) {
-        String databaseName = components.get(0);
+        return name.equals(components.get(0));
+      }
+
+      if (components.size() == 2) {
+        String databaseName = components.get(1);
         for (ClickHouseConnectionPool.TablePath table : connectionPool.getTables()) {
           if (table.getDatabaseName().equals(databaseName)) {
             return true;
