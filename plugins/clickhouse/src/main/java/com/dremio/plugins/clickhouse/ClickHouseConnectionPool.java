@@ -16,10 +16,11 @@
 package com.dremio.plugins.clickhouse;
 
 import java.sql.Connection;
-import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
@@ -34,6 +35,7 @@ public class ClickHouseConnectionPool {
   private static final Logger logger = LoggerFactory.getLogger(ClickHouseConnectionPool.class);
 
   private final String jdbcUrl;
+  private final String database;
   private final String username;
   private final String password;
   private final int maxConnections;
@@ -49,6 +51,7 @@ public class ClickHouseConnectionPool {
       boolean useSsl,
       int maxConnections) {
     this.jdbcUrl = String.format("jdbc:clickhouse://%s:%d/%s", host, port, database);
+    this.database = database;
     this.username = username;
     this.password = password;
     this.maxConnections = maxConnections;
@@ -69,6 +72,7 @@ public class ClickHouseConnectionPool {
     props.setProperty("password", password);
     props.setProperty("connect_timeout", "30000");
     props.setProperty("socket_timeout", "60000");
+    props.setProperty("compress", "0");
 
     return DriverManager.getConnection(jdbcUrl, props);
   }
@@ -98,42 +102,95 @@ public class ClickHouseConnectionPool {
   }
 
   /** Get list of tables from ClickHouse. */
-  public List<String> getTables() throws SQLException {
-    List<String> tables = new ArrayList<>();
+  public List<TablePath> getTables() throws SQLException {
+    List<TablePath> tables = new ArrayList<>();
     Connection conn = null;
     try {
       conn = getConnection();
-      DatabaseMetaData metaData = conn.getMetaData();
-      ResultSet rs = metaData.getTables(null, null, "%", new String[] {"TABLE"});
-      while (rs.next()) {
-        tables.add(rs.getString("TABLE_NAME"));
+      String sql = buildTableDiscoverySql();
+      try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+        bindDiscoveryParameters(stmt);
+        try (ResultSet rs = stmt.executeQuery()) {
+          while (rs.next()) {
+            tables.add(new TablePath(rs.getString("database"), rs.getString("name")));
+          }
+        }
       }
     } finally {
       closeConnection(conn);
     }
+    logger.info("Discovered {} ClickHouse tables for source database setting {}", tables.size(), database);
     return tables;
   }
 
   /** Get column metadata for a table. */
-  public List<ColumnMetaData> getColumns(String tableName) throws SQLException {
+  public List<ColumnMetaData> getColumns(String databaseName, String tableName) throws SQLException {
     List<ColumnMetaData> columns = new ArrayList<>();
     Connection conn = null;
     try {
       conn = getConnection();
-      DatabaseMetaData metaData = conn.getMetaData();
-      ResultSet rs = metaData.getColumns(null, null, tableName, null);
-      while (rs.next()) {
-        columns.add(
-            new ColumnMetaData(
-                rs.getString("COLUMN_NAME"),
-                rs.getString("TYPE_NAME"),
-                rs.getInt("DATA_TYPE"),
-                rs.getInt("COLUMN_SIZE")));
+      String sql =
+          "SELECT name, type FROM system.columns WHERE database = ? AND table = ? ORDER BY position";
+      try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+        stmt.setString(1, databaseName);
+        stmt.setString(2, tableName);
+        try (ResultSet rs = stmt.executeQuery()) {
+          while (rs.next()) {
+            String typeName = rs.getString("type");
+            columns.add(
+                new ColumnMetaData(
+                    rs.getString("name"), typeName, toSqlType(typeName), 0));
+          }
+        }
       }
     } finally {
       closeConnection(conn);
     }
     return columns;
+  }
+
+  private String buildTableDiscoverySql() {
+    if (shouldDiscoverAllDatabases()) {
+      return "SELECT database, name FROM system.tables "
+          + "WHERE is_temporary = 0 "
+          + "AND database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA') "
+          + "ORDER BY database, name";
+    }
+
+    return "SELECT database, name FROM system.tables "
+        + "WHERE database = ? AND is_temporary = 0 "
+        + "ORDER BY database, name";
+  }
+
+  private void bindDiscoveryParameters(PreparedStatement stmt) throws SQLException {
+    if (!shouldDiscoverAllDatabases()) {
+      stmt.setString(1, database);
+    }
+  }
+
+  private boolean shouldDiscoverAllDatabases() {
+    return database == null || database.isBlank() || "default".equalsIgnoreCase(database);
+  }
+
+  private int toSqlType(String typeName) {
+    if (typeName == null) {
+      return Types.VARCHAR;
+    }
+
+    String normalized = typeName.toUpperCase();
+    if (normalized.startsWith("INT") || normalized.startsWith("UINT")) {
+      return Types.BIGINT;
+    } else if (normalized.startsWith("FLOAT")) {
+      return Types.FLOAT;
+    } else if (normalized.startsWith("DECIMAL")) {
+      return Types.DECIMAL;
+    } else if (normalized.startsWith("DATE")) {
+      return Types.TIMESTAMP;
+    } else if (normalized.startsWith("BOOL")) {
+      return Types.BOOLEAN;
+    }
+
+    return Types.VARCHAR;
   }
 
   /** Close all connections. */
@@ -185,6 +242,25 @@ public class ClickHouseConnectionPool {
 
     public int getColumnSize() {
       return columnSize;
+    }
+  }
+
+  /** Table path holder. */
+  public static class TablePath {
+    private final String databaseName;
+    private final String tableName;
+
+    public TablePath(String databaseName, String tableName) {
+      this.databaseName = databaseName;
+      this.tableName = tableName;
+    }
+
+    public String getDatabaseName() {
+      return databaseName;
+    }
+
+    public String getTableName() {
+      return tableName;
     }
   }
 }

@@ -14,7 +14,7 @@
             "tooltip": "",
             "elements": [
               {
-                "propName": "config.host",
+                "propName": "config.hostname",
                 "uiType": "string",
                 "label": "Host",
                 "defaultValue": "localhost"

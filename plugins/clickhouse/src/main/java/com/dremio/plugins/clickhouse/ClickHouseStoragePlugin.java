@@ -123,12 +123,15 @@ public class ClickHouseStoragePlugin implements StoragePlugin, SupportsListingDa
       throws ConnectorException {
     return () -> {
       try {
-        List<String> tables = connectionPool.getTables();
+        List<ClickHouseConnectionPool.TablePath> tables = connectionPool.getTables();
         List<DatasetHandle> handles = new ArrayList<>();
 
-        for (String tableName : tables) {
-          EntityPath path = new EntityPath(Collections.singletonList(tableName));
-          handles.add(new ClickHouseDatasetHandle(path, tableName, "TABLE"));
+        for (ClickHouseConnectionPool.TablePath table : tables) {
+          EntityPath path =
+              new EntityPath(List.of(table.getDatabaseName(), table.getTableName()));
+          handles.add(
+              new ClickHouseDatasetHandle(
+                  path, table.getDatabaseName(), table.getTableName(), "TABLE"));
         }
 
         return handles.iterator();
@@ -146,11 +149,19 @@ public class ClickHouseStoragePlugin implements StoragePlugin, SupportsListingDa
       return Optional.empty();
     }
 
-    String tableName = path.getComponents().get(path.getComponents().size() - 1);
+    List<String> components = path.getComponents();
+    if (components.size() < 2) {
+      return Optional.empty();
+    }
+
+    String databaseName = components.get(components.size() - 2);
+    String tableName = components.get(components.size() - 1);
     try {
-      List<String> tables = connectionPool.getTables();
-      if (tables.contains(tableName)) {
-        return Optional.of(new ClickHouseDatasetHandle(path, tableName, "TABLE"));
+      for (ClickHouseConnectionPool.TablePath table : connectionPool.getTables()) {
+        if (table.getDatabaseName().equals(databaseName) && table.getTableName().equals(tableName)) {
+          return Optional.of(
+              new ClickHouseDatasetHandle(path, databaseName, tableName, "TABLE"));
+        }
       }
       return Optional.empty();
 
@@ -177,7 +188,8 @@ public class ClickHouseStoragePlugin implements StoragePlugin, SupportsListingDa
 
     try {
       List<ClickHouseConnectionPool.ColumnMetaData> columns =
-          connectionPool.getColumns(clickHouseHandle.getTableName());
+          connectionPool.getColumns(
+              clickHouseHandle.getDatabaseName(), clickHouseHandle.getTableName());
 
       List<Field> fields = new ArrayList<>();
       for (ClickHouseConnectionPool.ColumnMetaData col : columns) {
@@ -208,8 +220,29 @@ public class ClickHouseStoragePlugin implements StoragePlugin, SupportsListingDa
   @Override
   public boolean containerExists(EntityPath containerPath, GetMetadataOption... options) {
     try {
-      List<String> tables = connectionPool.getTables();
-      return tables.contains(containerPath.getComponents().get(0));
+      List<String> components = containerPath.getComponents();
+      if (components.isEmpty()) {
+        return false;
+      }
+
+      if (components.size() == 1) {
+        String databaseName = components.get(0);
+        for (ClickHouseConnectionPool.TablePath table : connectionPool.getTables()) {
+          if (table.getDatabaseName().equals(databaseName)) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      String databaseName = components.get(components.size() - 2);
+      String tableName = components.get(components.size() - 1);
+      for (ClickHouseConnectionPool.TablePath table : connectionPool.getTables()) {
+        if (table.getDatabaseName().equals(databaseName) && table.getTableName().equals(tableName)) {
+          return true;
+        }
+      }
+      return false;
     } catch (SQLException e) {
       return false;
     }
@@ -229,11 +262,14 @@ public class ClickHouseStoragePlugin implements StoragePlugin, SupportsListingDa
   /** Dataset handle for ClickHouse tables. */
   public static class ClickHouseDatasetHandle implements DatasetHandle {
     private final EntityPath path;
+    private final String databaseName;
     private final String tableName;
     private final String tableType;
 
-    public ClickHouseDatasetHandle(EntityPath path, String tableName, String tableType) {
+    public ClickHouseDatasetHandle(
+        EntityPath path, String databaseName, String tableName, String tableType) {
       this.path = path;
+      this.databaseName = databaseName;
       this.tableName = tableName;
       this.tableType = tableType;
     }
@@ -245,6 +281,10 @@ public class ClickHouseStoragePlugin implements StoragePlugin, SupportsListingDa
 
     public String getTableName() {
       return tableName;
+    }
+
+    public String getDatabaseName() {
+      return databaseName;
     }
 
     public String getTableType() {
