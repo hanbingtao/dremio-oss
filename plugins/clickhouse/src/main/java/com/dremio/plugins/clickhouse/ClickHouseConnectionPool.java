@@ -17,9 +17,9 @@ package com.dremio.plugins.clickhouse;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
@@ -107,12 +107,12 @@ public class ClickHouseConnectionPool {
     Connection conn = null;
     try {
       conn = getConnection();
-      String sql = buildTableDiscoverySql();
-      try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-        bindDiscoveryParameters(stmt);
-        try (ResultSet rs = stmt.executeQuery()) {
+      for (String databaseName : getDatabases(conn)) {
+        String sql = "SHOW TABLES FROM " + quoteIdentifier(databaseName);
+        try (Statement stmt = conn.createStatement();
+            ResultSet rs = stmt.executeQuery(sql)) {
           while (rs.next()) {
-            tables.add(new TablePath(rs.getString("database"), rs.getString("name")));
+            tables.add(new TablePath(databaseName, rs.getString(1)));
           }
         }
       }
@@ -130,17 +130,13 @@ public class ClickHouseConnectionPool {
     try {
       conn = getConnection();
       String sql =
-          "SELECT name, type FROM system.columns WHERE database = ? AND table = ? ORDER BY position";
-      try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-        stmt.setString(1, databaseName);
-        stmt.setString(2, tableName);
-        try (ResultSet rs = stmt.executeQuery()) {
-          while (rs.next()) {
-            String typeName = rs.getString("type");
-            columns.add(
-                new ColumnMetaData(
-                    rs.getString("name"), typeName, toSqlType(typeName), 0));
-          }
+          "DESCRIBE TABLE " + quoteIdentifier(databaseName) + "." + quoteIdentifier(tableName);
+      try (Statement stmt = conn.createStatement();
+          ResultSet rs = stmt.executeQuery(sql)) {
+        while (rs.next()) {
+          String typeName = rs.getString("type");
+          columns.add(
+              new ColumnMetaData(rs.getString("name"), typeName, toSqlType(typeName), 0));
         }
       }
     } finally {
@@ -149,27 +145,35 @@ public class ClickHouseConnectionPool {
     return columns;
   }
 
-  private String buildTableDiscoverySql() {
-    if (shouldDiscoverAllDatabases()) {
-      return "SELECT database, name FROM system.tables "
-          + "WHERE is_temporary = 0 "
-          + "AND database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA') "
-          + "ORDER BY database, name";
-    }
-
-    return "SELECT database, name FROM system.tables "
-        + "WHERE database = ? AND is_temporary = 0 "
-        + "ORDER BY database, name";
-  }
-
-  private void bindDiscoveryParameters(PreparedStatement stmt) throws SQLException {
+  private List<String> getDatabases(Connection conn) throws SQLException {
     if (!shouldDiscoverAllDatabases()) {
-      stmt.setString(1, database);
+      return List.of(database);
     }
+
+    List<String> databases = new ArrayList<>();
+    try (Statement stmt = conn.createStatement();
+        ResultSet rs = stmt.executeQuery("SHOW DATABASES")) {
+      while (rs.next()) {
+        String databaseName = rs.getString(1);
+        if (!isSystemDatabase(databaseName)) {
+          databases.add(databaseName);
+        }
+      }
+    }
+    return databases;
   }
 
   private boolean shouldDiscoverAllDatabases() {
     return database == null || database.isBlank() || "default".equalsIgnoreCase(database);
+  }
+
+  private boolean isSystemDatabase(String databaseName) {
+    return "system".equalsIgnoreCase(databaseName)
+        || "information_schema".equalsIgnoreCase(databaseName);
+  }
+
+  private String quoteIdentifier(String identifier) {
+    return "`" + identifier.replace("`", "``") + "`";
   }
 
   private int toSqlType(String typeName) {
