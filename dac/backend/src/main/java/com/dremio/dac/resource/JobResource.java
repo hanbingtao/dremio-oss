@@ -137,7 +137,7 @@ public class JobResource extends BaseResourceWithAllocator {
 
   private static final Pattern CLICKHOUSE_FROM_PATTERN =
       Pattern.compile(
-          "(?i)\\bfrom\\s+([A-Za-z0-9_]+)\\.(?:\"([^\"]+)\"|([A-Za-z0-9_]+))\\.(?:\"([^\"]+)\"|([A-Za-z0-9_]+))");
+          "(?i)\\bfrom\\s+(?:\"([^\"]+)\"|([A-Za-z0-9_]+))\\s*\\.\\s*(?:\"([^\"]+)\"|([A-Za-z0-9_]+))\\s*\\.\\s*(?:\"([^\"]+)\"|([A-Za-z0-9_]+))");
 
   @Inject
   public JobResource(
@@ -377,8 +377,13 @@ public class JobResource extends BaseResourceWithAllocator {
       return Optional.empty();
     }
 
-    final String databaseName = firstNonNull(matcher.group(2), matcher.group(3), path.get(1));
-    final String tableName = firstNonNull(matcher.group(4), matcher.group(5), path.get(2));
+    final String sourceInSql = firstNonNull(matcher.group(1), matcher.group(2), sourceName);
+    if (!sourceName.equalsIgnoreCase(sourceInSql)) {
+      return Optional.empty();
+    }
+
+    final String databaseName = firstNonNull(matcher.group(3), matcher.group(4), path.get(1));
+    final String tableName = firstNonNull(matcher.group(5), matcher.group(6), path.get(2));
 
     return Optional.of(
         new ClickHouseQueryContext(

@@ -209,7 +209,9 @@ public class ClickHouseStoragePlugin implements StoragePlugin, SupportsListingDa
 
         @Override
         public DatasetStats getDatasetStats() {
-          return DatasetStats.of(0, false, ScanCostFactor.OTHER.getFactor());
+          // Column metadata loading should not fail just because row-count stats are unavailable.
+          // Return an unknown record count with a positive generic scan factor.
+          return DatasetStats.of(ScanCostFactor.OTHER.getFactor());
         }
       };
 
